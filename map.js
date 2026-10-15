@@ -48,6 +48,7 @@ class Zone {
     this.containers = [];
     this.cans = [];
     this.lifts = [];
+    this.machines = [];
     this.decor = [];
     this.spawn = { x: 1.5, y: 1.5 };
     this.name = '';
@@ -90,6 +91,9 @@ class Zone {
   addLift(cx, cy) {
     this.fill(cx - 1, cy - 1, cx + 1, cy + 1, T.PLATFORM);
     this.lifts.push({ x: cx + 0.5, y: cy + 0.5, id: this.lifts.length });
+  }
+  addMachine(kind, x, y, waypoints) {
+    this.machines.push({ kind, x, y, waypoints: waypoints || [] });
   }
   // Lightweight walkability test used by can scatter + validation later.
   walkable(x, y) { return this.inb(x, y) && !this.isSolid(x, y); }
@@ -202,6 +206,21 @@ function makeTestZone() {
   z.addCan('lime', 25.5, 29.5);
   z.addCan('grapefruit', 9.5, 27.5);
   z.addCan('mango', 36.5, 12.5);
+
+  // Machines (phase 2). Skitters sit at a home spot; drones and the strider
+  // loop through waypoints. Nothing starts within sight of the spawn.
+  z.addMachine('skitter', 30.5, 53.5);        // parking lot
+  z.addMachine('skitter', 35.5, 58.5);        // parking lot, far corner
+  z.addMachine('skitter', 25.5, 44.5);        // gas station forecourt
+  z.addMachine('skitter', 8.5, 44.5);         // inside the store
+  z.addMachine('skitter', 10.5, 31.5);        // cross street, west
+  z.addMachine('skitter', 19.5, 15.5);        // under the overpass
+  z.addMachine('skitter', 13.5, 6.5);         // warehouse interior
+  z.addMachine('skitter', 36.5, 11.5);        // north-east, by the mango can
+  z.addMachine('drone', 24, 34, [{ x: 24, y: 34 }, { x: 34, y: 34 }, { x: 34, y: 46 }, { x: 22, y: 46 }]);   // gas station loop
+  z.addMachine('drone', 6, 36, [{ x: 6, y: 36 }, { x: 16, y: 36 }, { x: 16, y: 26 }, { x: 6, y: 26 }]);      // store + cross street
+  z.addMachine('drone', 12, 11.5, [{ x: 12, y: 11.5 }, { x: 22, y: 11.5 }, { x: 22, y: 3 }, { x: 12, y: 3 }]); // warehouse / north road
+  z.addMachine('strider', 30, 12.2, [{ x: 22.5, y: 12.2 }, { x: 37.5, y: 12.2 }, { x: 37.5, y: 2.5 }, { x: 22.5, y: 2.5 }]); // guards the 12-pack
 
   z.spawn = { x: 19.5, y: 61.5 };
   return z;

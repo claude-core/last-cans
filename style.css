@@ -85,3 +85,16 @@ button.big:active { transform: translateY(2px); box-shadow: 0 2px 0 #7a4a1a; }
 #result-body .big-num { font-size: 34px; font-weight: 800; color: #f0dfb8; margin: 6px 0; }
 #result-body .cans { font-size: 22px; letter-spacing: 2px; margin: 4px 0 10px; }
 h1.downed { color: #ff7a5a; text-shadow: 0 2px 0 #4a1c1c, 0 0 24px rgba(255,60,40,.4); }
+
+#alert {
+  position: absolute; left: calc(var(--sal) + 12px); right: calc(var(--sar) + 12px);
+  top: calc(var(--sat) + 64px); height: 16px; border-radius: 8px;
+  background: rgba(60,10,5,.5); overflow: hidden; pointer-events: none;
+}
+#alert-fill { height: 100%; width: 0%; background: linear-gradient(90deg,#ff8a3a,#ff2a1a); }
+#alert-text {
+  position: absolute; inset: 0; text-align: center; font-size: 11px; font-weight: 800; letter-spacing: 2px;
+  color: #fff; line-height: 16px; text-shadow: 0 1px 2px #000;
+}
+#alert.spotted { animation: blink .25s steps(2) infinite; }
+@keyframes blink { to { opacity: .55; } }

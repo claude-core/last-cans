@@ -26,7 +26,7 @@ const canvas = $('game');
 const ctx = canvas.getContext('2d', { alpha: false });
 const ui = {
   hud: $('hud'), timer: $('timer'), packFill: $('pack-fill'), packText: $('pack-text'),
-  prompt: $('prompt'), mute: $('mute'),
+  prompt: $('prompt'), mute: $('mute'), alert: $('alert'), alertFill: $('alert-fill'), alertText: $('alert-text'),
   btn: { call: $('btn-call'), search: $('btn-search'), swing: $('btn-swing'), throw: $('btn-throw') },
   title: $('screen-title'), result: $('screen-result'), resultTitle: $('result-title'),
   resultBody: $('result-body'), go: $('btn-go'), again: $('btn-again'), titleZone: $('title-zone'),
@@ -112,6 +112,27 @@ const Sfx = {
   thud() { this.tone(140, 0.2, 'triangle', 0.3, 60); this.noise(0.12, 0.2, 500, 0.6); },
   thunder() { this.noise(1.6, 0.5, 120, 0.4); this.tone(60, 1.4, 'sine', 0.3, 30); },
   storm() { this.noise(2.5, 0.8, 200, 0.3); },
+  skitterClick(v) { this.tone(2400 + Math.random() * 900, 0.025, 'square', 0.07 * v); },
+  skitterAlert(d) { const v = clamp(1 - d / 12, 0.2, 1); this.tone(1800, 0.08, 'square', 0.1 * v, 3200); this.tone(2600, 0.06, 'square', 0.08 * v, 4000); },
+  scanTick() { this.tone(1500, 0.06, 'sine', 0.12); },
+  screech() { this.tone(700, 0.5, 'sawtooth', 0.22, 2000); this.tone(1400, 0.45, 'square', 0.07, 2900); this.noise(0.3, 0.12, 2500, 1.5); },
+  striderAlarm() { this.tone(170, 1.0, 'sawtooth', 0.3, 85); this.tone(340, 0.9, 'square', 0.1, 170); this.noise(0.5, 0.2, 180, 0.5); },
+  stomp(v) { if (v <= 0) return; this.tone(52, 0.35, 'sine', 0.55 * v, 26); this.noise(0.18, 0.3 * v, 220, 0.5); },
+  clang() { this.tone(1150, 0.2, 'triangle', 0.32, 760); this.tone(2300, 0.1, 'sine', 0.12); this.noise(0.05, 0.25, 3200, 2); },
+  crunch() { this.noise(0.3, 0.4, 480, 0.6); this.tone(190, 0.25, 'sawtooth', 0.22, 55); },
+  setHum(d) {
+    if (!this.ctx) return;
+    if (!this.humGain) {
+      const c = this.ctx;
+      const g = c.createGain(); g.gain.value = 0; g.connect(this.master);
+      const f = c.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 700; f.connect(g);
+      for (const fr of [96, 192, 287]) { const o = c.createOscillator(); o.type = 'sawtooth'; o.frequency.value = fr; o.connect(f); o.start(); }
+      const lfo = c.createOscillator(); lfo.frequency.value = 9; const lg = c.createGain(); lg.gain.value = 0.3; lfo.connect(lg); lg.connect(f.frequency); lfo.start();
+      this.humGain = g;
+    }
+    const v = d === Infinity ? 0 : clamp(1 - d / 14, 0, 1) * 0.13;
+    this.humGain.gain.setTargetAtTime(v, this.ctx.currentTime, 0.1);
+  },
 };
 ui.mute.textContent = Sfx.muted ? '🔇' : '🔊';
 ui.mute.addEventListener('click', e => { e.preventDefault(); Sfx.init(); Sfx.setMuted(!Sfx.muted); });
@@ -126,12 +147,12 @@ const G = {
   state: 'title', zone: null, player: null, cam: { x: 0, y: 0 }, t: 0, storm: STORM_SECONDS,
   cans: [], floats: [], noises: [], particles: [], thrown: [],
   lift: { active: null, hold: 0, countdown: 0, arrived: false, arriveT: 0, lastBeep: -1 },
-  result: null, practice: false, shake: 0, stormHit: false,
+  result: null, practice: false, shake: 0, stormHit: false, machines: [], alert: 0, downFlash: 0,
 };
 
 function newPlayer(x, y) {
   return { x, y, dir: -Math.PI / 2, mode: 'idle', speed: 0, pack: [], weight: 0, value: 0,
-    step: 0, search: null, swing: 0, swingCd: 0, noise: 0, frozen: false };
+    step: 0, search: null, swing: 0, swingCd: 0, noise: 0, noiseT: 0, frozen: false };
 }
 
 function startRun() {
@@ -143,11 +164,13 @@ function startRun() {
   G.cans = z.cans.map(c => ({ ...c }));
   G.floats = []; G.noises = []; G.particles = []; G.thrown = [];
   G.lift = { active: null, hold: 0, countdown: 0, arrived: false, arriveT: 0, lastBeep: -1 };
-  G.result = null; G.shake = 0;
+  G.result = null; G.shake = 0; G.alert = 0; G.downFlash = 0;
+  G.machines = makeMachines(z);
   for (const c of z.containers) { c.searched = false; c.progress = 0; }
   G.state = 'playing';
   ui.title.classList.add('hidden'); ui.result.classList.add('hidden'); ui.hud.classList.remove('hidden');
   ui.timer.classList.remove('red');
+  ui.alert.classList.add('hidden'); ui.alert.classList.remove('spotted');
 }
 
 function endRun(kind, reason) {
@@ -157,6 +180,7 @@ function endRun(kind, reason) {
   G.result = { kind, reason, value: p.value, pack: p.pack.slice(), stormLeft: Math.max(0, G.storm), weight: p.weight };
   joy.active = false; searchTouch.id = null;
   for (const k in held) held[k] = false;
+  Sfx.setHum(Infinity);
   setTimeout(showResult, kind === 'extracted' ? 900 : 1400);
 }
 
@@ -314,7 +338,7 @@ function liftUnderPlayer() {
   return null;
 }
 function addFloat(x, y, text, color, big) { G.floats.push({ x, y, text, color: color || '#fff', t: 0, life: 1.1, big: !!big }); }
-function emitNoise(x, y, radius, kind) { G.noises.push({ x, y, r: radius, t: 0, life: 0.6, kind: kind || 'noise' }); }
+function emitNoise(x, y, radius, kind) { G.noises.push({ x, y, r: radius, t: 0, life: 0.6, kind: kind || 'noise' }); if (G.machines) hearAll(x, y, radius); }
 function burst(x, y, color, n, speed) {
   for (let i = 0; i < n; i++) {
     const a = Math.random() * Math.PI * 2, s = (0.5 + Math.random()) * (speed || 2.5);
@@ -336,7 +360,9 @@ function update(dt) {
     updateStorm(dt);
     if (G.state === 'playing') updatePlayer(dt);
     if (G.state === 'playing') updateLift(dt);
+    if (G.state === 'playing') updateMachines(dt);
   }
+  G.downFlash = Math.max(0, G.downFlash - dt * 1.5);
   updateCans(dt);
   updateThrown(dt);
   for (const f of G.floats) f.t += dt; G.floats = G.floats.filter(f => f.t < f.life);
@@ -405,6 +431,8 @@ function updatePlayer(dt) {
   p.noise = mode === 'sneak' ? 1.2 : mode === 'walk' ? 3 : mode === 'sprint' ? 6.5 : 0;
   p.noise *= 1 + 0.7 * wf;
   if (mode === 'sprint' && Math.floor(p.step / 2.5) !== Math.floor((p.step - spd * dt * 2.2) / 2.5)) emitNoise(p.x, p.y, p.noise, 'step');
+  p.noiseT += dt;
+  if (p.noiseT >= 0.3) { p.noiseT = 0; if (mode !== 'idle' && mode !== 'sprint') hearAll(p.x, p.y, p.noise); }
 
   // --- search progress ---
   if (searching) {
@@ -433,7 +461,7 @@ function updatePlayer(dt) {
   if (pressed.swing && p.swingCd <= 0) {
     p.swing = 0.32; p.swingCd = 0.45;
     Sfx.swing(); emitNoise(p.x, p.y, 3.5, 'swing');
-    // Phase 2: hit machines inside the swing arc here.
+    swingHits();
   }
 
   // --- throw lowest can as a distraction ---
@@ -529,6 +557,473 @@ function updateLift(dt) {
 }
 
 // ---------------------------------------------------------------------------
+// Sight: grid raycast + line of sight
+// ---------------------------------------------------------------------------
+// Walks the tile grid from (x0,y0) along `ang`. Returns the distance to the
+// first opaque tile edge, or maxLen. If the ray reaches tile (tx1,ty1) it is
+// treated as unobstructed (so a target pressed against a wall is still seen).
+function castRay(x0, y0, ang, maxLen, tx1, ty1) {
+  const z = G.zone;
+  const dx = Math.cos(ang), dy = Math.sin(ang);
+  let tx = Math.floor(x0), ty = Math.floor(y0);
+  const stepX = dx > 0 ? 1 : -1, stepY = dy > 0 ? 1 : -1;
+  const tDeltaX = dx !== 0 ? Math.abs(1 / dx) : Infinity, tDeltaY = dy !== 0 ? Math.abs(1 / dy) : Infinity;
+  let tMaxX = dx !== 0 ? (dx > 0 ? tx + 1 - x0 : x0 - tx) * tDeltaX : Infinity;
+  let tMaxY = dy !== 0 ? (dy > 0 ? ty + 1 - y0 : y0 - ty) * tDeltaY : Infinity;
+  let t = 0;
+  for (let i = 0; i < 160; i++) {
+    if (tMaxX < tMaxY) { t = tMaxX; tMaxX += tDeltaX; tx += stepX; } else { t = tMaxY; tMaxY += tDeltaY; ty += stepY; }
+    if (t >= maxLen) return maxLen;
+    if (tx === tx1 && ty === ty1) return maxLen;
+    if (z.isOpaque(tx, ty)) return t;
+  }
+  return maxLen;
+}
+function hasLOS(x0, y0, x1, y1) {
+  const d = Math.hypot(x1 - x0, y1 - y0);
+  if (d < 0.01) return true;
+  return castRay(x0, y0, Math.atan2(y1 - y0, x1 - x0), d, Math.floor(x1), Math.floor(y1)) >= d;
+}
+// Can a machine at (mx,my) see the player? Brush hides you unless they're on top of you.
+function playerVisibleFrom(mx, my) {
+  const p = G.player;
+  const d = Math.hypot(p.x - mx, p.y - my);
+  if (d < 1.4) return true;
+  if (G.zone.get(Math.floor(p.x), Math.floor(p.y)) === T.BRUSH) return false;
+  return hasLOS(mx, my, p.x, p.y);
+}
+function angDiff(a, b) { let d = a - b; while (d > Math.PI) d -= Math.PI * 2; while (d < -Math.PI) d += Math.PI * 2; return d; }
+function inCone(m, x, y, len, half) {
+  const dx = x - m.x, dy = y - m.y, d = Math.hypot(dx, dy);
+  if (d > len) return false;
+  return Math.abs(angDiff(Math.atan2(dy, dx), m.scan)) <= half + (d < 1 ? 1 : 0);
+}
+
+// ---------------------------------------------------------------------------
+// Pathfinding: BFS over the tile grid (zone is small, so this is cheap).
+// ---------------------------------------------------------------------------
+const bfs = { prev: null, mark: null, queue: null, gen: 0, n: 0 };
+function findPath(sx, sy, tx, ty, clearance) {
+  const z = G.zone, w = z.w, n = w * z.h;
+  if (bfs.n !== n) { bfs.prev = new Int32Array(n); bfs.mark = new Int32Array(n); bfs.queue = new Int32Array(n); bfs.n = n; bfs.gen = 0; }
+  const gen = ++bfs.gen, prev = bfs.prev, mark = bfs.mark, q = bfs.queue;
+  const s = Math.floor(sy) * w + Math.floor(sx), t = Math.floor(ty) * w + Math.floor(tx);
+  if (s === t) return [];
+  const okTile = (x, y) => {
+    if (z.isSolid(x, y)) return false;
+    if (!clearance) return true;
+    return !z.isSolid(x - 1, y) && !z.isSolid(x + 1, y) && !z.isSolid(x, y - 1) && !z.isSolid(x, y + 1) &&
+           !z.isSolid(x - 1, y - 1) && !z.isSolid(x + 1, y - 1) && !z.isSolid(x - 1, y + 1) && !z.isSolid(x + 1, y + 1);
+  };
+  let qh = 0, qt = 0; q[qt++] = s; mark[s] = gen; prev[s] = -1;
+  let found = false;
+  while (qh < qt) {
+    const i = q[qh++];
+    if (i === t) { found = true; break; }
+    const x = i % w, y = (i / w) | 0;
+    for (let k = 0; k < 4; k++) {
+      const nx = x + (k === 0 ? -1 : k === 1 ? 1 : 0), ny = y + (k === 2 ? -1 : k === 3 ? 1 : 0);
+      if (!z.inb(nx, ny)) continue;
+      const j = ny * w + nx;
+      if (mark[j] === gen) continue;
+      if (j === t ? z.isSolid(nx, ny) : !okTile(nx, ny)) continue;
+      mark[j] = gen; prev[j] = i; q[qt++] = j;
+    }
+  }
+  if (!found) return null;
+  const path = [];
+  for (let i = t; i !== s; i = prev[i]) path.push({ x: (i % w) + 0.5, y: ((i / w) | 0) + 0.5 });
+  path.reverse();
+  return path;
+}
+function moveToward(m, tx, ty, speed, dt, fly) {
+  const dx = tx - m.x, dy = ty - m.y, d = Math.hypot(dx, dy);
+  if (d < 0.001) return;
+  const step = Math.min(d, speed * dt);
+  m.dir = Math.atan2(dy, dx);
+  if (fly) { m.x += dx / d * step; m.y += dy / d * step; }
+  else moveCircle(m, dx / d * step, dy / d * step, m.r);
+  m.anim += step;
+}
+// Ground machines: walk straight when the target is close and visible,
+// otherwise follow a BFS path that is refreshed every half second.
+function steerTo(m, tx, ty, speed, dt, clearance) {
+  const d = Math.hypot(tx - m.x, ty - m.y);
+  if (d < 0.05) return;
+  if (d < 1.3 && hasLOS(m.x, m.y, tx, ty)) { m.path = null; moveToward(m, tx, ty, speed, dt); return; }
+  m.pathT -= dt;
+  const key = Math.floor(tx) + ',' + Math.floor(ty);
+  if (!m.path || m.pathT <= 0 || m.pathKey !== key) {
+    m.path = findPath(m.x, m.y, tx, ty, clearance);
+    if (!m.path && clearance) m.path = findPath(m.x, m.y, tx, ty, false);
+    m.pathT = 0.5; m.pathKey = key;
+    if (m.path && m.path.length > 1 && Math.hypot(m.path[0].x - m.x, m.path[0].y - m.y) < 0.6) m.path.shift();
+  }
+  if (m.path && m.path.length) {
+    const wp = m.path[0];
+    if (Math.hypot(wp.x - m.x, wp.y - m.y) < 0.22) { m.path.shift(); if (!m.path.length) return; }
+    const n = m.path[0];
+    moveToward(m, n.x, n.y, speed, dt);
+  } else moveToward(m, tx, ty, speed, dt);
+}
+
+// ---------------------------------------------------------------------------
+// Machines
+// ---------------------------------------------------------------------------
+const MDEF = {
+  skitter: { r: 0.28, speed: 5.0, sightIdle: 3.5, sightChase: 9, hearMul: 1 },
+  drone:   { r: 0.4, speed: 2.4, trackSpeed: 3.3, beamLen: 6.5, beamHalf: 0.38, fillTime: 1.3 },
+  strider: { r: 0.9, speed: 1.4, chaseSpeed: 3.0, beamLen: 12, beamHalf: 0.72, fillTime: 0.7 },
+};
+function makeMachines(z) {
+  return z.machines.map((d, i) => ({
+    kind: d.kind, x: d.x, y: d.y, r: MDEF[d.kind].r, dir: Math.random() * 6.28, scan: 0,
+    state: d.kind === 'skitter' ? 'idle' : 'patrol', home: { x: d.x, y: d.y },
+    waypoints: d.waypoints.map(w => ({ x: w.x, y: w.y })), wp: d.waypoints.length > 1 ? 1 : 0,
+    target: null, lastSeen: null, path: null, pathT: 0, pathKey: '', timer: 0, alert: 0, anim: 0,
+    dead: false, wake: 0, height: 1, callT: 0, phase: i * 1.7, clickT: 0, stompT: 0, lastX: d.x, lastY: d.y, id: i,
+  }));
+}
+function aggroMul() { return G.storm <= STORM_RED_AT ? 1.3 : 1; }
+
+// Every noise event ends up here. Skitters chase sound; the strider only
+// bothers with loud things (lift calls); drones are eyes only.
+function hearAll(x, y, radius) {
+  for (const m of G.machines) {
+    if (m.dead) continue;
+    const d = Math.hypot(m.x - x, m.y - y);
+    if (m.kind === 'skitter') {
+      if (d > radius * MDEF.skitter.hearMul * aggroMul()) continue;
+      if (m.state === 'chase') continue;
+      m.target = { x, y }; m.state = 'investigate'; m.wake = m.state === 'idle' ? 0.3 : 0; m.timer = 0;
+    } else if (m.kind === 'strider') {
+      if (radius >= 10 && d <= radius * 1.5 && m.state === 'patrol') { m.target = { x, y }; m.state = 'investigate'; }
+    }
+  }
+}
+// A spotter (drone or strider) calls everything nearby onto the player.
+function callMachines(x, y, radius, caller) {
+  for (const m of G.machines) {
+    if (m.dead || m === caller) continue;
+    if (Math.hypot(m.x - x, m.y - y) > radius) continue;
+    if (m.kind === 'skitter') { m.state = 'chase'; m.lastSeen = { x, y }; m.wake = 0.25; m.timer = 3; }
+    else if (m.kind === 'strider') { if (m.state === 'patrol') { m.target = { x, y }; m.state = 'investigate'; } }
+    else if (m.kind === 'drone') { if (m.state === 'patrol') { m.alert = Math.max(m.alert, 0.6); m.scanLock = { x, y, t: 2.5 }; } }
+  }
+}
+
+function updateMachines(dt) {
+  const p = G.player;
+  let alertMax = 0, nearestDrone = Infinity;
+  for (const m of G.machines) {
+    if (m.dead) { if (m.kind === 'drone' && m.height > 0) { m.height = Math.max(0, m.height - dt * 2); } continue; }
+    if (m.kind === 'skitter') updateSkitter(m, dt);
+    else if (m.kind === 'drone') { updateDrone(m, dt); nearestDrone = Math.min(nearestDrone, Math.hypot(m.x - p.x, m.y - p.y)); }
+    else updateStrider(m, dt);
+    if (m.alert > alertMax) alertMax = m.alert;
+    if (G.state === 'playing' && !G.lift.arrived) {
+      const canTouch = m.kind !== 'drone' || m.height < 0.4;
+      if (canTouch && Math.hypot(m.x - p.x, m.y - p.y) < m.r + PLAYER_R) downedBy(m);
+    }
+  }
+  G.alert = alertMax;
+  Sfx.setHum(nearestDrone);
+}
+
+function downedBy(m) {
+  const msg = m.kind === 'skitter' ? 'A skitter ran you down.' : m.kind === 'drone' ? 'A spotter drone dove into you.' : 'The strider crushed you.';
+  Sfx.crunch(); G.shake = 1.2; G.downFlash = 1;
+  burst(G.player.x, G.player.y, '#ff4a3a', 18, 3);
+  endRun('downed', msg);
+}
+
+function updateSkitter(m, dt) {
+  const p = G.player, D = MDEF.skitter, ag = aggroMul(), spd = D.speed * ag;
+  const dp = Math.hypot(p.x - m.x, p.y - m.y);
+  const sight = (m.state === 'chase' ? D.sightChase : D.sightIdle) * ag;
+  const sees = dp < sight && playerVisibleFrom(m.x, m.y);
+  if (sees) {
+    if (m.state !== 'chase') { m.state = 'chase'; m.wake = m.state === 'idle' ? 0.35 : 0.1; m.path = null; Sfx.skitterAlert(dp); }
+    m.lastSeen = { x: p.x, y: p.y }; m.timer = 3;
+  }
+  if (m.wake > 0) { m.wake -= dt; m.anim += dt * 3; return; }
+  switch (m.state) {
+    case 'idle':
+      if (Math.random() < dt * 0.3) m.dir += (Math.random() - 0.5) * 1.5;
+      break;
+    case 'investigate':
+      steerTo(m, m.target.x, m.target.y, spd * 0.85, dt);
+      skitterClicks(m, dt, dp);
+      if (Math.hypot(m.target.x - m.x, m.target.y - m.y) < 0.5) { m.state = 'look'; m.timer = 2; }
+      break;
+    case 'look':
+      m.timer -= dt; m.dir += dt * 2.5;
+      if (m.timer <= 0) m.state = 'return';
+      break;
+    case 'return':
+      steerTo(m, m.home.x, m.home.y, spd * 0.6, dt);
+      if (Math.hypot(m.home.x - m.x, m.home.y - m.y) < 0.4) m.state = 'idle';
+      break;
+    case 'chase':
+      steerTo(m, m.lastSeen.x, m.lastSeen.y, spd, dt);
+      skitterClicks(m, dt, dp);
+      if (!sees) {
+        m.timer -= dt;
+        if (Math.hypot(m.lastSeen.x - m.x, m.lastSeen.y - m.y) < 0.5 || m.timer <= 0) { m.state = 'look'; m.timer = 2.5; }
+      }
+      break;
+  }
+}
+function skitterClicks(m, dt, dp) {
+  m.clickT -= dt;
+  if (m.clickT <= 0 && dp < 12) { m.clickT = 0.1 + Math.random() * 0.1; Sfx.skitterClick(clamp(1 - dp / 12, 0, 1)); }
+}
+
+function updateDrone(m, dt) {
+  const p = G.player, D = MDEF.drone, ag = aggroMul();
+  const dp = Math.hypot(p.x - m.x, p.y - m.y);
+  if (m.state === 'patrol') {
+    const wp = m.waypoints[m.wp] || m.home;
+    moveToward(m, wp.x, wp.y, D.speed * ag, dt, true);
+    if (Math.hypot(wp.x - m.x, wp.y - m.y) < 0.3) m.wp = (m.wp + 1) % Math.max(1, m.waypoints.length);
+    m.heading = m.dir;
+    if (m.scanLock && m.scanLock.t > 0) { m.scanLock.t -= dt; m.scan = Math.atan2(m.scanLock.y - m.y, m.scanLock.x - m.x); }
+    else m.scan = m.heading + Math.sin(G.t * 1.1 + m.phase) * 0.8;
+    m.height = lerp(m.height, 1, 1 - Math.pow(0.1, dt));
+    const inBeam = inCone(m, p.x, p.y, D.beamLen, D.beamHalf) && playerVisibleFrom(m.x, m.y);
+    if (inBeam) m.alert = Math.min(1, m.alert + dt / (D.fillTime / ag));
+    else m.alert = Math.max(0, m.alert - dt / 1.6);
+    if (inBeam && m.alert < 1 && !m.warned) { m.warned = true; Sfx.scanTick(); }
+    if (!inBeam) m.warned = false;
+    if (m.alert >= 1) {
+      m.state = 'track'; m.timer = 10; m.lastSeen = { x: p.x, y: p.y }; m.callT = 4;
+      Sfx.screech(); addFloat(p.x, p.y - 1.3, 'SPOTTED', '#ff5a3a', true);
+      callMachines(p.x, p.y, 16, m); G.shake = Math.max(G.shake, 0.3);
+    }
+  } else if (m.state === 'track') {
+    const sees = dp < 14 && playerVisibleFrom(m.x, m.y);
+    if (sees) { m.lastSeen = { x: p.x, y: p.y }; m.timer = 10; } else m.timer -= dt;
+    const d = Math.hypot(m.lastSeen.x - m.x, m.lastSeen.y - m.y);
+    if (d > 0.9) moveToward(m, m.lastSeen.x, m.lastSeen.y, D.trackSpeed * ag, dt, true);
+    m.scan = m.heading = Math.atan2(m.lastSeen.y - m.y, m.lastSeen.x - m.x);
+    m.height = lerp(m.height, 0.2, 1 - Math.pow(0.25, dt));
+    m.callT -= dt;
+    if (m.callT <= 0 && sees) { m.callT = 4; Sfx.screech(); callMachines(p.x, p.y, 16, m); }
+    m.alert = 1;
+    if (m.timer <= 0) { m.state = 'patrol'; m.alert = 0; }
+  }
+}
+
+function updateStrider(m, dt) {
+  const p = G.player, D = MDEF.strider, ag = aggroMul();
+  const dp = Math.hypot(p.x - m.x, p.y - m.y);
+  const sees = (inCone(m, p.x, p.y, D.beamLen, D.beamHalf) || dp < 2.2) && playerVisibleFrom(m.x, m.y);
+  if (m.state === 'patrol' || m.state === 'investigate') {
+    if (m.state === 'patrol') {
+      const wp = m.waypoints[m.wp] || m.home;
+      steerTo(m, wp.x, wp.y, D.speed * ag, dt, true);
+      if (Math.hypot(wp.x - m.x, wp.y - m.y) < 0.7) m.wp = (m.wp + 1) % Math.max(1, m.waypoints.length);
+    } else {
+      steerTo(m, m.target.x, m.target.y, D.speed * 1.4 * ag, dt, true);
+      if (Math.hypot(m.target.x - m.x, m.target.y - m.y) < 1.5) m.state = 'patrol';
+    }
+    m.scan = m.dir + Math.sin(G.t * 0.6 + m.phase) * 0.55;
+    if (sees) m.alert = Math.min(1, m.alert + dt / (D.fillTime / ag));
+    else m.alert = Math.max(0, m.alert - dt / 2.5);
+    if (sees && m.alert > 0 && !m.warned) { m.warned = true; Sfx.scanTick(); }
+    if (!sees) m.warned = false;
+    if (m.alert >= 1) striderLock(m);
+  } else if (m.state === 'chase') {
+    if (sees) { m.lastSeen = { x: p.x, y: p.y }; m.timer = 6; } else m.timer -= dt;
+    steerTo(m, m.lastSeen.x, m.lastSeen.y, D.chaseSpeed * ag, dt, true);
+    m.scan = Math.atan2(m.lastSeen.y - m.y, m.lastSeen.x - m.x);
+    m.alert = 1;
+    if (m.timer <= 0) { m.state = 'patrol'; m.alert = 0; }
+  }
+  // footsteps: a thud and a tremor every stride
+  const moved = Math.hypot(m.x - m.lastX, m.y - m.lastY); m.lastX = m.x; m.lastY = m.y;
+  m.stompT += moved;
+  if (m.stompT > 1.5) {
+    m.stompT = 0;
+    emitNoise(m.x, m.y, 3, 'stomp');
+    Sfx.stomp(clamp(1 - dp / 20, 0, 1));
+    if (dp < 10) G.shake = Math.max(G.shake, 0.18 * (1 - dp / 10));
+  }
+}
+function striderLock(m) {
+  const p = G.player;
+  m.state = 'chase'; m.lastSeen = { x: p.x, y: p.y }; m.timer = 6; m.alert = 1; m.path = null;
+  Sfx.striderAlarm(); addFloat(p.x, p.y - 1.3, 'STRIDER LOCKED ON', '#ff3a2a', true);
+  callMachines(p.x, p.y, 22, m); G.shake = Math.max(G.shake, 0.5);
+}
+
+// The golf club. Skitters die to one hit, a diving drone can be swatted,
+// the strider just rings like a bell and comes for you.
+function swingHits() {
+  const p = G.player;
+  let hit = false;
+  for (const m of G.machines) {
+    if (m.dead) continue;
+    const dx = m.x - p.x, dy = m.y - p.y, d = Math.hypot(dx, dy);
+    if (d > 1.3 + m.r) continue;
+    if (Math.abs(angDiff(Math.atan2(dy, dx), p.dir)) > 1.45) continue;
+    hit = true;
+    if (m.kind === 'skitter') {
+      m.dead = true; m.dir = p.dir;
+      m.x += Math.cos(p.dir) * 0.5; m.y += Math.sin(p.dir) * 0.5;
+      Sfx.clang(); Sfx.crunch(); burst(m.x, m.y, '#ffd27a', 12, 3); burst(m.x, m.y, '#ff4a2a', 6, 2);
+      addFloat(m.x, m.y - 0.6, 'SMASHED', '#ffd27a', true);
+      emitNoise(m.x, m.y, 5, 'clang');
+    } else if (m.kind === 'drone') {
+      if (m.height < 0.55) {
+        m.dead = true; Sfx.clang(); Sfx.crunch(); burst(m.x, m.y, '#ffd27a', 14, 3);
+        addFloat(m.x, m.y - 0.6, 'DRONE DOWN', '#ffd27a', true);
+        emitNoise(m.x, m.y, 5, 'clang');
+      } else { addFloat(m.x, m.y - 0.6, 'too high', '#ddd'); hit = false; }
+    } else {
+      Sfx.clang(); burst(m.x + Math.cos(p.dir) * -m.r, m.y + Math.sin(p.dir) * -m.r, '#ffd27a', 8, 2);
+      addFloat(m.x, m.y - 1.4, 'CLANG', '#ffd27a', true);
+      emitNoise(m.x, m.y, 8, 'clang');
+      if (m.state !== 'chase') striderLock(m);
+      G.shake = Math.max(G.shake, 0.3);
+    }
+  }
+  return hit;
+}
+
+// ---------------------------------------------------------------------------
+// Machine rendering
+// ---------------------------------------------------------------------------
+function drawBeams() {
+  for (const m of G.machines) {
+    if (m.dead || m.kind === 'skitter') continue;
+    const D = MDEF[m.kind];
+    if (Math.abs(m.x - G.cam.x) > W / S / 2 + D.beamLen || Math.abs(m.y - G.cam.y) > H / S / 2 + D.beamLen) continue;
+    const ox = m.x, oy = m.y;
+    const N = m.kind === 'strider' ? 22 : 14;
+    const half = D.beamHalf, len = D.beamLen;
+    ctx.beginPath(); ctx.moveTo(ox, oy);
+    for (let i = 0; i <= N; i++) {
+      const a = m.scan - half + (2 * half) * i / N;
+      const t = castRay(ox, oy, a, len, -1, -1);
+      ctx.lineTo(ox + Math.cos(a) * t, oy + Math.sin(a) * t);
+    }
+    ctx.closePath();
+    const hot = m.alert;
+    const g = ctx.createRadialGradient(ox, oy, 0.3, ox, oy, len);
+    g.addColorStop(0, `rgba(255,${Math.round(90 - 60 * hot)},${Math.round(60 - 40 * hot)},${0.32 + 0.3 * hot})`);
+    g.addColorStop(1, `rgba(255,${Math.round(90 - 60 * hot)},${Math.round(60 - 40 * hot)},${0.04 + 0.08 * hot})`);
+    ctx.fillStyle = g; ctx.fill();
+    ctx.strokeStyle = `rgba(255,120,80,${0.15 + 0.3 * hot})`; ctx.lineWidth = 0.04; ctx.stroke();
+  }
+}
+
+function drawMachines(layer) {
+  const hw = W / S / 2 + 3, hh = H / S / 2 + 3;
+  for (const m of G.machines) {
+    if (Math.abs(m.x - G.cam.x) > hw || Math.abs(m.y - G.cam.y) > hh) continue;
+    const above = m.kind === 'drone' && !m.dead;
+    if ((layer === 'above') !== above) continue;
+    if (m.kind === 'skitter') drawSkitter(m);
+    else if (m.kind === 'drone') drawDrone(m);
+    else drawStrider(m);
+  }
+}
+
+function drawSkitter(m) {
+  ctx.save(); ctx.translate(m.x, m.y);
+  ctx.fillStyle = 'rgba(0,0,0,0.3)'; ctx.beginPath(); ctx.ellipse(0.03, 0.08, 0.34, 0.22, 0, 0, 7); ctx.fill();
+  ctx.rotate(m.dir);
+  const moving = !m.dead && (m.state === 'chase' || m.state === 'investigate' || m.state === 'return');
+  ctx.strokeStyle = m.dead ? '#4a4a4a' : '#2b2e33'; ctx.lineWidth = 0.045; ctx.lineCap = 'round';
+  ctx.beginPath();
+  for (let i = -1; i <= 1; i++) for (const s of [-1, 1]) {
+    const ph = m.anim * 9 + i * 2.1 + (s > 0 ? 0 : Math.PI);
+    const lift = moving ? Math.sin(ph) * 0.1 : 0;
+    const bx = i * 0.13, by = s * 0.1;
+    const kx = bx + (m.dead ? 0.1 : 0.05) + lift, ky = s * (m.dead ? 0.42 : 0.3);
+    ctx.moveTo(bx, by); ctx.lineTo(kx, ky * 0.6); ctx.lineTo(kx + 0.06, ky);
+  }
+  ctx.stroke();
+  ctx.fillStyle = m.dead ? '#5a5a5a' : '#3a3d42';
+  ctx.beginPath(); ctx.ellipse(0, 0, 0.3, 0.19, 0, 0, 7); ctx.fill();
+  ctx.fillStyle = m.dead ? '#6a6a6a' : '#5a5e66';
+  ctx.beginPath(); ctx.ellipse(-0.04, -0.03, 0.18, 0.1, 0, 0, 7); ctx.fill();
+  if (!m.dead) {
+    ctx.save(); ctx.translate(0.2, 0); ctx.scale(0.45, 0.45); ctx.fillStyle = glowFor('#ff2a1a'); ctx.beginPath(); ctx.arc(0, 0, 1, 0, 7); ctx.fill(); ctx.restore();
+    ctx.fillStyle = m.state === 'chase' ? '#ff3a2a' : '#c42a1a';
+    ctx.beginPath(); ctx.arc(0.2, 0, 0.065, 0, 7); ctx.fill();
+  } else {
+    ctx.strokeStyle = '#2a2a2a'; ctx.lineWidth = 0.03;
+    ctx.beginPath(); ctx.moveTo(-0.15, -0.1); ctx.lineTo(0.1, 0.12); ctx.moveTo(0.05, -0.12); ctx.lineTo(-0.1, 0.1); ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawDrone(m) {
+  const h = m.dead ? 0 : m.height;
+  ctx.save(); ctx.translate(m.x, m.y);
+  // ground shadow, offset by hover height
+  ctx.fillStyle = `rgba(0,0,0,${0.3 - 0.12 * h})`;
+  ctx.beginPath(); ctx.ellipse(0.15 * h, 0.5 * h + 0.1, 0.45 - 0.1 * h, 0.3 - 0.08 * h, 0, 0, 7); ctx.fill();
+  ctx.translate(0, -0.6 * h);
+  ctx.rotate(m.scan || 0);
+  // rotors
+  const spin = m.dead ? 0 : G.t * 40 + m.phase;
+  for (const [ax, ay] of [[0.36, 0.36], [-0.36, 0.36], [0.36, -0.36], [-0.36, -0.36]]) {
+    ctx.strokeStyle = '#3a3e45'; ctx.lineWidth = 0.05;
+    ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(ax, ay); ctx.stroke();
+    ctx.fillStyle = m.dead ? 'rgba(90,90,90,0.5)' : 'rgba(170,175,185,0.35)';
+    ctx.beginPath(); ctx.arc(ax, ay, 0.2, 0, 7); ctx.fill();
+    if (!m.dead) { ctx.strokeStyle = 'rgba(220,225,235,0.6)'; ctx.lineWidth = 0.03; ctx.beginPath(); ctx.moveTo(ax - Math.cos(spin) * 0.2, ay - Math.sin(spin) * 0.2); ctx.lineTo(ax + Math.cos(spin) * 0.2, ay + Math.sin(spin) * 0.2); ctx.stroke(); }
+  }
+  ctx.fillStyle = m.dead ? '#555' : '#484d55'; ctx.beginPath(); ctx.arc(0, 0, 0.3, 0, 7); ctx.fill();
+  ctx.fillStyle = m.dead ? '#666' : '#6a7079'; ctx.beginPath(); ctx.arc(-0.04, -0.04, 0.18, 0, 7); ctx.fill();
+  if (!m.dead) {
+    ctx.save(); ctx.translate(0.22, 0); ctx.scale(0.5, 0.5); ctx.fillStyle = glowFor('#ff2a1a'); ctx.beginPath(); ctx.arc(0, 0, 1, 0, 7); ctx.fill(); ctx.restore();
+    ctx.fillStyle = m.state === 'track' ? '#ff3a2a' : '#d43020';
+    ctx.beginPath(); ctx.arc(0.22, 0, 0.09, 0, 7); ctx.fill();
+    ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(0.24, -0.02, 0.03, 0, 7); ctx.fill();
+  } else {
+    ctx.strokeStyle = '#2a2a2a'; ctx.lineWidth = 0.03;
+    ctx.beginPath(); ctx.moveTo(-0.15, -0.1); ctx.lineTo(0.12, 0.12); ctx.moveTo(0.08, -0.14); ctx.lineTo(-0.1, 0.1); ctx.stroke();
+  }
+  ctx.restore();
+}
+
+function drawStrider(m) {
+  ctx.save(); ctx.translate(m.x, m.y);
+  ctx.fillStyle = 'rgba(0,0,0,0.3)'; ctx.beginPath(); ctx.ellipse(0.1, 0.25, 1.2, 0.8, 0, 0, 7); ctx.fill();
+  ctx.rotate(m.dir);
+  // four legs with raised knees; feet step in sequence
+  ctx.strokeStyle = '#2f3236'; ctx.lineWidth = 0.12; ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+  for (let i = 0; i < 4; i++) {
+    const side = i % 2 ? 1 : -1, front = i < 2 ? 1 : -1;
+    const ph = m.anim * 2.2 + i * (Math.PI / 2);
+    const stepX = Math.cos(ph) * 0.45;
+    const hipX = front * 0.55, hipY = side * 0.4;
+    const footX = front * 0.9 + stepX, footY = side * 1.45;
+    const kneeX = (hipX + footX) / 2 + front * 0.2, kneeY = side * 1.0;
+    ctx.beginPath(); ctx.moveTo(hipX, hipY); ctx.lineTo(kneeX, kneeY); ctx.lineTo(footX, footY); ctx.stroke();
+    ctx.fillStyle = '#1f2124'; ctx.beginPath(); ctx.arc(footX, footY, 0.14, 0, 7); ctx.fill();
+  }
+  // body
+  ctx.fillStyle = '#464a52'; ctx.beginPath(); ctx.ellipse(0, 0, 1.25, 0.72, 0, 0, 7); ctx.fill();
+  ctx.fillStyle = '#5c616a'; ctx.beginPath(); ctx.ellipse(-0.1, -0.08, 0.95, 0.45, 0, 0, 7); ctx.fill();
+  ctx.fillStyle = '#3a3d43'; ctx.fillRect(-0.9, -0.5, 0.25, 1); ctx.fillRect(-0.3, -0.55, 0.2, 1.1);
+  // head with the floodlight eye
+  ctx.fillStyle = '#3a3d43'; ctx.beginPath(); ctx.arc(1.05, 0, 0.42, 0, 7); ctx.fill();
+  ctx.fillStyle = '#4e535b'; ctx.beginPath(); ctx.arc(1.0, -0.06, 0.28, 0, 7); ctx.fill();
+  ctx.restore();
+  ctx.save(); ctx.translate(m.x, m.y); ctx.rotate(m.scan);
+  ctx.save(); ctx.translate(1.15, 0); ctx.scale(0.9, 0.9); ctx.fillStyle = glowFor('#ff2a1a'); ctx.beginPath(); ctx.arc(0, 0, 1, 0, 7); ctx.fill(); ctx.restore();
+  ctx.fillStyle = m.state === 'chase' ? '#ff3a2a' : '#d8321f';
+  ctx.beginPath(); ctx.arc(1.15, 0, 0.17, 0, 7); ctx.fill();
+  ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(1.19, -0.04, 0.05, 0, 7); ctx.fill();
+  ctx.restore();
+}
+
+// ---------------------------------------------------------------------------
 // Rendering
 // ---------------------------------------------------------------------------
 const PAL = {
@@ -564,12 +1059,15 @@ function render() {
   drawTiles();
   drawDecor();
   for (const l of G.zone.lifts) drawLift(l);
+  drawBeams();
   drawNoises();
   for (const c of G.zone.containers) drawContainer(c);
   for (const c of G.cans) drawCan(c);
+  drawMachines('ground');
   for (const c of G.thrown) drawCan(c);
   drawParticles();
   drawPlayer();
+  drawMachines('above');
   if (G.lift.arrived) drawLiftCage();
 
   // screen space
@@ -918,6 +1416,7 @@ function drawAtmosphere() {
   // hazy daylight that reddens as the storm closes in
   const k = clamp(1 - G.storm / STORM_RED_AT, 0, 1);
   if (G.stormHit) { ctx.fillStyle = 'rgba(40,10,10,0.6)'; ctx.fillRect(0, 0, W, H); }
+  if (G.downFlash > 0) { ctx.fillStyle = `rgba(200,20,10,${0.55 * G.downFlash})`; ctx.fillRect(0, 0, W, H); }
   ctx.fillStyle = `rgba(${Math.round(lerp(255, 200, k))},${Math.round(lerp(210, 50, k))},${Math.round(lerp(140, 30, k))},${lerp(0.06, 0.22, k)})`;
   ctx.fillRect(0, 0, W, H);
   if (!vignette) {
@@ -988,6 +1487,15 @@ function updateHud() {
   const wpct = Math.round(wf * 100) + '%';
   if (hudCache.w !== wpct) { hudCache.w = wpct; ui.packFill.style.width = wpct; }
   setText(ui.packText, 'pack', `${p.value.toLocaleString()} pts · ${p.pack.length} can${p.pack.length === 1 ? '' : 's'} · ${p.mode === 'sneak' ? 'sneaking' : p.mode === 'sprint' ? 'SPRINTING' : p.mode === 'walk' ? 'walking' : 'still'}${wf > 0.6 ? ' · HEAVY' : ''}`);
+  const alertOn = G.alert > 0.02 && G.state === 'playing';
+  show(ui.alert, 'alert', alertOn);
+  if (alertOn) {
+    const w = Math.round(G.alert * 100) + '%';
+    if (hudCache.aw !== w) { hudCache.aw = w; ui.alertFill.style.width = w; }
+    setText(ui.alertText, 'atext', G.alert >= 1 ? 'SPOTTED' : 'DETECTING');
+    const sp = G.alert >= 1;
+    if (hudCache.asp !== sp) { hudCache.asp = sp; ui.alert.classList.toggle('spotted', sp); }
+  }
   const near = nearestContainer(), onLift = liftUnderPlayer();
   show(ui.btn.search, 'bSearch', !!near && G.state === 'playing');
   show(ui.btn.call, 'bCall', !!onLift && G.lift.countdown <= 0 && !G.lift.arrived && G.state === 'playing');
@@ -1017,5 +1525,5 @@ function frame(now) {
 requestAnimationFrame(frame);
 
 // Debug hooks for the console.
-window.LC = { G, startRun, endRun, Sfx };
+window.LC = { G, startRun, endRun, Sfx, step(ms) { update(ms / 1000); render(); updateHud(); } };
 })();
