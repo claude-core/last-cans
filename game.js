@@ -883,7 +883,7 @@ function drawGolfClub() {
   ctx.strokeStyle = '#c9ccd2'; ctx.lineWidth = 0.045;
   ctx.beginPath(); ctx.moveTo(0.78, 0); ctx.quadraticCurveTo(0.86, 0, 0.88, 0.08); ctx.stroke();
   // head: a rounded driver head angled off the shaft
-  ctx.save(); ctx.translate(0.9, 0.14); ctx.rotate(0.35);
+  ctx.save(); ctx.translate(0.88, 0.12); ctx.rotate(0.35); ctx.scale(0.78, 0.78);
   ctx.fillStyle = '#2b2d33';
   ctx.beginPath(); ctx.ellipse(0, 0, 0.21, 0.13, 0, 0, 7); ctx.fill();
   ctx.fillStyle = '#4c5058';
