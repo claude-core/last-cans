@@ -26,10 +26,14 @@ const canvas = $('game');
 const ctx = canvas.getContext('2d', { alpha: false });
 const ui = {
   hud: $('hud'), timer: $('timer'), packFill: $('pack-fill'), packText: $('pack-text'),
-  prompt: $('prompt'), mute: $('mute'), alert: $('alert'), alertFill: $('alert-fill'), alertText: $('alert-text'),
+  prompt: $('prompt'), mute: $('mute'), alert: $('alert'), alertFill: $('alert-fill'), alertText: $('alert-text'), modeTag: $('mode-tag'),
   btn: { call: $('btn-call'), search: $('btn-search'), swing: $('btn-swing'), throw: $('btn-throw') },
-  title: $('screen-title'), result: $('screen-result'), resultTitle: $('result-title'),
-  resultBody: $('result-body'), go: $('btn-go'), again: $('btn-again'), titleZone: $('title-zone'), titleNext: $('title-next'),
+  title: $('screen-title'), titleZone: $('title-zone'), titleNext: $('title-next'), titleFine: $('title-fine'),
+  go: $('btn-go'), titlePractice: $('btn-title-practice'),
+  result: $('screen-result'), resultZone: $('result-zone'), resultTitle: $('result-title'), resultTag: $('result-tag'),
+  resultBody: $('result-body'), resultNext: $('result-next'),
+  share: $('btn-share'), stats: $('btn-stats'), practice: $('btn-practice'), today: $('btn-today'), again: $('btn-again'),
+  statsScreen: $('screen-stats'), statsBody: $('stats-body'), statsClose: $('btn-stats-close'), toast: $('toast'),
 };
 
 let dpr = 1, W = 1, H = 1, S = 40;   // S = css px per world unit
@@ -186,8 +190,44 @@ function newPlayer(x, y) {
     step: 0, search: null, swing: 0, swingCd: 0, noise: 0, noiseT: 0, frozen: false };
 }
 
-function startRun() {
+// ---------------------------------------------------------------------------
+// Persistence: one official result per zone, lifetime stats, streaks.
+// Debug zones (?zone=N) never touch storage.
+// ---------------------------------------------------------------------------
+const Store = {
+  key: 'lastcans_v1', data: null,
+  load() {
+    try { this.data = JSON.parse(localStorage.getItem(this.key)) || {}; } catch (_) { this.data = {}; }
+    this.data.results = this.data.results || {};
+    this.data.stats = Object.assign({ runs: 0, extractions: 0, bestHaul: 0, bestHaulZone: 0, cansExtracted: 0, packsExtracted: 0, streak: 0, bestStreak: 0, lastZone: 0 }, this.data.stats || {});
+  },
+  save() { try { localStorage.setItem(this.key, JSON.stringify(this.data)); } catch (_) {} },
+  result(zone) { return this.data.results[zone] || null; },
+  record(zone, r) {
+    if (this.data.results[zone]) return;              // never overwrite a day
+    this.data.results[zone] = { kind: r.kind, value: r.value, pack: r.pack, stormLeft: r.stormLeft, reason: r.reason, at: Date.now() };
+    const s = this.data.stats;
+    s.runs++;
+    if (r.kind === 'extracted') {
+      s.extractions++;
+      s.cansExtracted += r.pack.length;
+      s.packsExtracted += r.pack.filter(t => t === 'pack').length;
+      if (r.value > s.bestHaul) { s.bestHaul = r.value; s.bestHaulZone = zone; }
+      s.streak = s.lastZone === zone - 1 ? s.streak + 1 : 1;
+      if (s.streak > s.bestStreak) s.bestStreak = s.streak;
+    } else s.streak = 0;
+    s.lastZone = zone;
+    delete this.data.inProgress;
+    this.save();
+  },
+};
+Store.load();
+
+// mode: 'official' (counts, once per day), 'practice' (today's zone, never counted), 'debug' (?zone=N)
+function startRun(mode) {
+  G.mode = mode || (DEBUG_ZONE ? 'debug' : 'official');
   G.zoneNum = todayZoneNumber();
+  if (G.mode === 'official' && Store.result(G.zoneNum)) { boot(); return; }   // already played today
   G.zone = makeZoneFor(G.zoneNum);
   const z = G.zone;
   G.player = newPlayer(z.spawn.x, z.spawn.y);
@@ -200,55 +240,155 @@ function startRun() {
   G.machines = makeMachines(z);
   for (const c of z.containers) { c.searched = false; c.progress = 0; }
   G.state = 'playing';
-  ui.title.classList.add('hidden'); ui.result.classList.add('hidden'); ui.hud.classList.remove('hidden');
+  if (G.mode === 'official') { Store.data.inProgress = G.zoneNum; Store.save(); }   // closing the tab mid-run still uses up the day
+  hideScreens(); ui.hud.classList.remove('hidden');
   ui.timer.classList.remove('red');
   ui.alert.classList.add('hidden'); ui.alert.classList.remove('spotted');
+  ui.modeTag.textContent = G.mode === 'practice' ? 'PRACTICE' : G.mode === 'debug' ? 'DEBUG · ZONE #' + G.zoneNum : '';
+  ui.modeTag.classList.toggle('hidden', G.mode === 'official');
 }
 
 function endRun(kind, reason) {
   if (G.state !== 'playing') return;
   G.state = kind;
   const p = G.player;
-  G.result = { kind, reason, value: p.value, pack: p.pack.slice(), stormLeft: Math.max(0, G.storm), weight: p.weight };
+  G.result = { kind, reason, value: kind === 'extracted' ? p.value : 0, carried: p.value, pack: p.pack.slice(), stormLeft: Math.max(0, G.storm), zone: G.zoneNum, mode: G.mode };
   joy.active = false; searchTouch.id = null;
   for (const k in held) held[k] = false;
   Sfx.setHum(Infinity);
-  setTimeout(showResult, kind === 'extracted' ? 900 : 1400);
+  if (G.mode === 'official') Store.record(G.zoneNum, G.result);
+  setTimeout(() => showResult(G.result, G.mode), kind === 'extracted' ? 900 : 1400);
 }
 
-function showResult() {
-  const r = G.result;
-  ui.hud.classList.add('hidden');
+function hideScreens() { for (const s of [ui.title, ui.result, ui.statsScreen]) s.classList.add('hidden'); ui.hud.classList.add('hidden'); }
+
+function canCounts(pack) { const c = {}; for (const t of pack) c[t] = (c[t] || 0) + 1; return c; }
+function emojiRow(pack) {
+  const counts = canCounts(pack);
+  const cans = CAN_ORDER.filter(t => t !== 'pack').map(t => CANS[t].emoji.repeat(Math.min(counts[t] || 0, 30))).join('');
+  const packs = counts.pack ? CANS.pack.emoji.repeat(counts.pack) : '';
+  if (cans && packs) return cans + ' + ' + packs;
+  return cans || packs;
+}
+
+function showResult(r, mode) {
+  hideScreens();
+  G.state = r.kind;
+  G.shownZone = r.zone;
+  const practice = mode === 'practice', debug = mode === 'debug';
+  ui.resultZone.textContent = 'Zone #' + r.zone;
   ui.resultTitle.textContent = r.kind === 'extracted' ? 'EXTRACTED' : 'DOWNED';
   ui.resultTitle.classList.toggle('downed', r.kind !== 'extracted');
-  const counts = {}; for (const t of r.pack) counts[t] = (counts[t] || 0) + 1;
-  const emojiRow = CAN_ORDER.map(t => CANS[t].emoji.repeat(Math.min(counts[t] || 0, 20))).join('');
+  ui.resultTag.classList.toggle('hidden', !(practice || debug));
+  ui.resultTag.textContent = practice ? 'PRACTICE RUN — NOT COUNTED' : 'DEBUG RUN — NOT COUNTED';
+  const counts = canCounts(r.pack);
   let html = '';
   if (r.kind === 'extracted') {
     html += `<div class="big-num">${r.value.toLocaleString()} pts</div>`;
-    html += `<div class="cans">${emojiRow || '—'}</div>`;
+    html += `<div class="cans">${emojiRow(r.pack) || 'no cans'}</div>`;
     for (const t of CAN_ORDER) if (counts[t]) html += `<div class="row"><span>${CANS[t].emoji} ${CANS[t].name} × ${counts[t]}</span><span>${(counts[t] * CANS[t].pts).toLocaleString()}</span></div>`;
     html += `<div class="row"><span>⛈️ Storm time left</span><span>${fmtTime(r.stormLeft)}</span></div>`;
   } else {
     html += `<div class="big-num">0 pts</div>`;
-    html += `<div>${r.reason}</div>`;
-    if (r.value > 0) html += `<div>You were carrying <b>${r.value.toLocaleString()} pts</b> 💀</div><div class="cans">${emojiRow}</div>`;
+    html += `<div class="down-msg">${r.reason || ''}</div>`;
+    if (r.carried > 0) html += `<div>You were carrying <b>${r.carried.toLocaleString()} pts</b> 💀</div><div class="cans">${emojiRow(r.pack)}</div>`;
   }
   ui.resultBody.innerHTML = html;
+  ui.share.classList.toggle('hidden', practice || debug);
+  ui.practice.classList.toggle('hidden', debug);
+  ui.today.classList.toggle('hidden', !practice);
+  ui.again.classList.toggle('hidden', !debug);
+  ui.resultNext.textContent = '';
   ui.result.classList.remove('hidden');
+  refreshCountdowns();
 }
 
-ui.go.addEventListener('click', e => { e.preventDefault(); unlockAudio(); startRun(); });
-ui.again.addEventListener('click', e => { e.preventDefault(); unlockAudio(); startRun(); });
-function refreshTitle() {
-  const n = todayZoneNumber();
-  ui.titleZone.textContent = DEBUG_ZONE === 'test' ? 'Test Zone' : 'Zone #' + n + (DEBUG_ZONE ? ' · debug' : '');
-  const ms = msUntilNextZone();
-  const s = Math.max(0, Math.floor(ms / 1000));
-  ui.titleNext.textContent = 'Next zone in ' + Math.floor(s / 3600) + ':' + String(Math.floor(s / 60) % 60).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0');
+function showStats() {
+  const s = Store.data.stats;
+  const rate = s.runs ? Math.round(100 * s.extractions / s.runs) : 0;
+  const rows = [
+    ['Runs', s.runs], ['Extraction rate', rate + '%'], ['Best haul', s.bestHaul.toLocaleString() + (s.bestHaulZone ? ' pts · Zone #' + s.bestHaulZone : ' pts')],
+    ['Cans extracted', s.cansExtracted], ['12-packs extracted', s.packsExtracted], ['Current streak', s.streak], ['Best streak', s.bestStreak],
+  ];
+  ui.statsBody.innerHTML = rows.map(([k, v]) => `<div class="row"><span>${k}</span><b>${v}</b></div>`).join('');
+  ui.statsScreen.classList.remove('hidden');
 }
-refreshTitle();
-setInterval(() => { if (G.state === 'title') refreshTitle(); }, 1000);
+
+let toastT = null;
+function toast(msg) {
+  ui.toast.textContent = msg; ui.toast.classList.remove('hidden');
+  clearTimeout(toastT); toastT = setTimeout(() => ui.toast.classList.add('hidden'), 1800);
+}
+
+function shareText(r) {
+  const url = location.origin + location.pathname;
+  const lines = ['Last Cans — Zone #' + r.zone + ' 🥫'];
+  if (r.kind === 'extracted') {
+    lines.push('🛗 Extracted with ' + r.value.toLocaleString() + ' pts');
+    const row = emojiRow(r.pack); if (row) lines.push(row);
+    lines.push('⛈️ ' + fmtTime(r.stormLeft) + ' before the storm');
+  } else {
+    lines.push('🤖 Downed carrying ' + r.carried.toLocaleString() + ' pts 💀');
+  }
+  lines.push(url);
+  return lines.join('\n');
+}
+async function share(r) {
+  const text = shareText(r);
+  if (navigator.share) {
+    try { await navigator.share({ text }); return; } catch (e) { if (e && e.name === 'AbortError') return; }
+  }
+  try { await navigator.clipboard.writeText(text); toast('Copied to clipboard'); }
+  catch (_) {
+    const ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); toast('Copied to clipboard'); } catch (__) { toast('Could not copy'); }
+    ta.remove();
+  }
+}
+
+// Decide what to show when the game opens (or the day rolls over).
+function boot() {
+  const n = todayZoneNumber();
+  G.zoneNum = n; G.shownZone = n;
+  if (!DEBUG_ZONE) {
+    // a run that was started and never finished counts as a loss
+    if (Store.data.inProgress === n && !Store.result(n)) {
+      Store.record(n, { kind: 'downed', value: 0, carried: 0, pack: [], stormLeft: 0, reason: 'You went topside and never came back.' });
+    }
+    const done = Store.result(n);
+    if (done) { showResult(Object.assign({ zone: n, carried: done.value }, done, { value: done.kind === 'extracted' ? done.value : 0, carried: done.kind === 'extracted' ? done.value : (done.carried ?? done.value) }), 'official'); return; }
+  }
+  hideScreens();
+  G.state = 'title';
+  ui.titleZone.textContent = DEBUG_ZONE === 'test' ? 'Test Zone' : 'Zone #' + n + (DEBUG_ZONE ? ' · debug' : '');
+  ui.title.classList.remove('hidden');
+  refreshCountdowns();
+}
+
+function countdownText() {
+  const s = Math.max(0, Math.floor(msUntilNextZone() / 1000));
+  return Math.floor(s / 3600) + ':' + String(Math.floor(s / 60) % 60).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0');
+}
+function refreshCountdowns() {
+  if (DEBUG_ZONE) { ui.titleNext.textContent = 'Debug zone — results are not saved'; ui.resultNext.textContent = ''; return; }
+  const t = 'Next zone in ' + countdownText();
+  ui.titleNext.textContent = t;
+  if (G.mode !== 'practice') ui.resultNext.textContent = t;
+}
+setInterval(() => {
+  if (G.state === 'playing') return;
+  if (!DEBUG_ZONE && zoneNumber() !== G.shownZone) { boot(); return; }   // midnight rolled over
+  refreshCountdowns();
+}, 1000);
+
+ui.go.addEventListener('click', e => { e.preventDefault(); unlockAudio(); startRun(); });
+ui.titlePractice.addEventListener('click', e => { e.preventDefault(); unlockAudio(); startRun('practice'); });
+ui.again.addEventListener('click', e => { e.preventDefault(); unlockAudio(); startRun('debug'); });
+ui.practice.addEventListener('click', e => { e.preventDefault(); unlockAudio(); startRun('practice'); });
+ui.today.addEventListener('click', e => { e.preventDefault(); boot(); });
+ui.share.addEventListener('click', e => { e.preventDefault(); if (G.result) share(G.result); });
+ui.stats.addEventListener('click', e => { e.preventDefault(); showStats(); });
+ui.statsClose.addEventListener('click', e => { e.preventDefault(); ui.statsScreen.classList.add('hidden'); });
 
 function fmtTime(s) { s = Math.max(0, Math.ceil(s)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }
 
@@ -1564,6 +1704,8 @@ function frame(now) {
 }
 requestAnimationFrame(frame);
 
+boot();
+
 // Debug hooks for the console.
-window.LC = { G, startRun, endRun, Sfx, step(ms) { update(ms / 1000); render(); updateHud(); } };
+window.LC = { G, startRun, endRun, Sfx, Store, boot, shareText, step(ms) { update(ms / 1000); render(); updateHud(); } };
 })();

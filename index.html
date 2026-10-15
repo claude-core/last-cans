@@ -28,6 +28,7 @@
     <button id="mute" type="button" aria-label="Mute">🔊</button>
   </div>
   <div id="alert" class="hidden"><div id="alert-fill"></div><span id="alert-text">DETECTING</span></div>
+  <div id="mode-tag" class="hidden">PRACTICE</div>
   <div id="prompt"></div>
   <div id="buttons">
     <button class="btn btn-call hidden" id="btn-call" type="button">CALL<br>LIFT</button>
@@ -53,17 +54,37 @@
       <li>Stand on a lift and <b>hold CALL</b>. Stay on it for 10 seconds.</li>
     </ul>
     <button class="big" id="btn-go" type="button">Go Topside</button>
-    <div class="fine" id="title-fine">Phase 3 test build — a new zone every day at midnight New York time</div>
+    <button class="big alt hidden" id="btn-title-practice" type="button">Practice</button>
+    <div class="fine" id="title-fine">Phase 4 test build — one official run per day</div>
   </div>
 </div>
 
 <div id="screen-result" class="screen hidden">
   <div class="panel">
+    <div class="sub" id="result-zone">Zone #1</div>
     <h1 id="result-title">EXTRACTED</h1>
+    <div class="tag hidden" id="result-tag">PRACTICE RUN — NOT COUNTED</div>
     <div id="result-body"></div>
-    <button class="big" id="btn-again" type="button">Run it again</button>
+    <div class="btn-row">
+      <button class="big" id="btn-share" type="button">Share</button>
+      <button class="big alt" id="btn-stats" type="button">Stats</button>
+    </div>
+    <button class="big alt" id="btn-practice" type="button">Practice this zone</button>
+    <button class="big alt hidden" id="btn-today" type="button">Back to today's result</button>
+    <button class="big hidden" id="btn-again" type="button">Run it again</button>
+    <div class="fine" id="result-next"></div>
   </div>
 </div>
+
+<div id="screen-stats" class="screen hidden">
+  <div class="panel">
+    <h1 class="small">STATS</h1>
+    <div id="stats-body"></div>
+    <button class="big alt" id="btn-stats-close" type="button">Close</button>
+  </div>
+</div>
+
+<div id="toast" class="hidden"></div>
 
 <script src="map.js"></script>
 <script src="game.js"></script>
