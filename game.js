@@ -842,14 +842,11 @@ function drawPlayer() {
   const ang = p.swing > 0 ? lerp(-1.6, 1.2, easeOut(sw)) : 0.9;
   ctx.save(); ctx.translate(0.1 + bob, 0.3);
   ctx.rotate(ang);
-  ctx.strokeStyle = '#8c8c90'; ctx.lineWidth = 0.06; ctx.lineCap = 'round';
-  ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(0.72, 0); ctx.stroke();
-  ctx.fillStyle = '#5a5a60'; roundRect(0.68, -0.09, 0.16, 0.16, 0.04); ctx.fill();
-  ctx.strokeStyle = '#2d2520'; ctx.lineWidth = 0.08; ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(0.2, 0); ctx.stroke();
+  drawGolfClub();
   ctx.restore();
   if (p.swing > 0) {
     ctx.strokeStyle = `rgba(255,240,200,${0.5 * (1 - sw)})`; ctx.lineWidth = 0.1;
-    ctx.beginPath(); ctx.arc(0.1, 0.3, 0.8, -1.6, lerp(-1.6, 1.2, easeOut(sw))); ctx.stroke();
+    ctx.beginPath(); ctx.arc(0.1, 0.3, 0.95, -1.6, lerp(-1.6, 1.2, easeOut(sw))); ctx.stroke();
   }
   ctx.fillStyle = '#b08a5c';
   ctx.beginPath(); ctx.arc(0.1 + bob, 0.3, 0.09, 0, 7); ctx.fill();
@@ -867,6 +864,38 @@ function drawPlayer() {
   }
 }
 function easeOut(t) { return 1 - (1 - t) * (1 - t); }
+
+// A driver seen from above: rubber grip, steel shaft, hosel bend, and a
+// rounded club head set off to one side of the shaft end.
+function drawGolfClub() {
+  ctx.lineCap = 'round';
+  // shaft (with a thin dark edge so it reads against light ground)
+  ctx.strokeStyle = '#3a3a3e'; ctx.lineWidth = 0.075;
+  ctx.beginPath(); ctx.moveTo(0.05, 0); ctx.lineTo(0.78, 0); ctx.stroke();
+  ctx.strokeStyle = '#c9ccd2'; ctx.lineWidth = 0.045;
+  ctx.beginPath(); ctx.moveTo(0.05, 0); ctx.lineTo(0.78, 0); ctx.stroke();
+  // grip
+  ctx.strokeStyle = '#1c1816'; ctx.lineWidth = 0.1;
+  ctx.beginPath(); ctx.moveTo(-0.08, 0); ctx.lineTo(0.22, 0); ctx.stroke();
+  ctx.strokeStyle = '#4a4440'; ctx.lineWidth = 0.025;
+  ctx.beginPath(); ctx.moveTo(-0.02, -0.02); ctx.lineTo(0.18, -0.02); ctx.stroke();
+  // hosel: shaft bends down into the head
+  ctx.strokeStyle = '#c9ccd2'; ctx.lineWidth = 0.045;
+  ctx.beginPath(); ctx.moveTo(0.78, 0); ctx.quadraticCurveTo(0.86, 0, 0.88, 0.08); ctx.stroke();
+  // head: a rounded driver head angled off the shaft
+  ctx.save(); ctx.translate(0.9, 0.14); ctx.rotate(0.35);
+  ctx.fillStyle = '#2b2d33';
+  ctx.beginPath(); ctx.ellipse(0, 0, 0.21, 0.13, 0, 0, 7); ctx.fill();
+  ctx.fillStyle = '#4c5058';
+  ctx.beginPath(); ctx.ellipse(-0.02, -0.03, 0.15, 0.08, 0, 0, 7); ctx.fill();
+  // face: a flat lighter edge on the striking side
+  ctx.strokeStyle = '#d8dbe0'; ctx.lineWidth = 0.035;
+  ctx.beginPath(); ctx.moveTo(-0.17, -0.12); ctx.lineTo(0.19, -0.1); ctx.stroke();
+  // grooves
+  ctx.strokeStyle = '#8a8e96'; ctx.lineWidth = 0.015;
+  ctx.beginPath(); ctx.moveTo(-0.12, -0.08); ctx.lineTo(0.14, -0.07); ctx.moveTo(-0.1, -0.05); ctx.lineTo(0.12, -0.04); ctx.stroke();
+  ctx.restore();
+}
 
 function drawNoises() {
   for (const n of G.noises) {
