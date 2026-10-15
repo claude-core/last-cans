@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Last Cans">
+<meta name="theme-color" content="#2a221c">
+<meta name="format-detection" content="telephone=no">
+<title>Last Cans</title>
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon.png">
+<link rel="icon" href="icon.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<canvas id="game"></canvas>
+
+<div id="hud" class="hidden">
+  <div id="hud-top">
+    <div id="timer">3:00</div>
+    <div id="pack">
+      <div id="pack-bar"><div id="pack-fill"></div></div>
+      <div id="pack-text">0 pts · 0 cans</div>
+    </div>
+    <button id="mute" type="button" aria-label="Mute">🔊</button>
+  </div>
+  <div id="prompt"></div>
+  <div id="buttons">
+    <button class="btn btn-call hidden" id="btn-call" type="button">CALL<br>LIFT</button>
+    <button class="btn hidden" id="btn-search" type="button">SEARCH</button>
+    <button class="btn hidden" id="btn-throw" type="button">THROW</button>
+    <button class="btn" id="btn-swing" type="button">SWING</button>
+  </div>
+</div>
+
+<div id="screen-title" class="screen">
+  <div class="panel">
+    <h1>LAST CANS</h1>
+    <div class="sub" id="title-zone">Test Zone</div>
+    <p class="blurb">Topside is ruined. The machines own it. The last hard seltzer cans on Earth are still up there.</p>
+    <p class="blurb">Go up, grab what you can, and get back to a lift before the storm.</p>
+    <ul class="howto">
+      <li><b>Drag</b> anywhere to move. Small drag sneaks, big drag sprints.</li>
+      <li>Stand next to a container and <b>hold SEARCH</b>.</li>
+      <li>Every can you carry slows you down.</li>
+      <li>Stand on a lift and <b>hold CALL</b>. Stay on it for 10 seconds.</li>
+    </ul>
+    <button class="big" id="btn-go" type="button">Go Topside</button>
+    <div class="fine" id="title-fine">Phase 1 test build — no machines yet</div>
+  </div>
+</div>
+
+<div id="screen-result" class="screen hidden">
+  <div class="panel">
+    <h1 id="result-title">EXTRACTED</h1>
+    <div id="result-body"></div>
+    <button class="big" id="btn-again" type="button">Run it again</button>
+  </div>
+</div>
+
+<script src="map.js"></script>
+<script src="game.js"></script>
+</body>
+</html>

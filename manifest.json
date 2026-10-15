@@ -1,0 +1,14 @@
+{
+  "name": "Last Cans",
+  "short_name": "Last Cans",
+  "description": "Scavenge the last hard seltzer cans topside and get back to the lift before the storm.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#2a221c",
+  "theme_color": "#2a221c",
+  "icons": [
+    { "src": "icon.png", "sizes": "512x512", "type": "image/png", "purpose": "any" }
+  ]
+}
