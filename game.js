@@ -81,6 +81,7 @@ const Sfx = {
     const f = c.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 420;
     const g = c.createGain(); g.gain.value = 0.22;
     src.connect(f); f.connect(g); g.connect(this.master); src.start();
+    this.windFilter = f;
     const lfo = c.createOscillator(); lfo.frequency.value = 0.11;
     const lg = c.createGain(); lg.gain.value = 260; lfo.connect(lg); lg.connect(f.frequency); lfo.start();
     this.wind = g;
@@ -124,6 +125,21 @@ const Sfx = {
   stomp(v) { if (v <= 0) return; this.tone(52, 0.35, 'sine', 0.55 * v, 26); this.noise(0.18, 0.3 * v, 220, 0.5); },
   clang() { this.tone(1150, 0.2, 'triangle', 0.32, 760); this.tone(2300, 0.1, 'sine', 0.12); this.noise(0.05, 0.25, 3200, 2); },
   crunch() { this.noise(0.3, 0.4, 480, 0.6); this.tone(190, 0.25, 'sawtooth', 0.22, 55); },
+  setStorm(k, rk) {
+    if (!this.ctx || !this.wind) return;
+    const t = this.ctx.currentTime;
+    this.wind.gain.setTargetAtTime(0.22 + 0.45 * k, t, 0.5);
+    if (this.windFilter) this.windFilter.frequency.setTargetAtTime(420 + 700 * k, t, 0.5);
+    if (rk > 0 && !this.rainGain) {
+      const c = this.ctx, len = c.sampleRate * 2, buf = c.createBuffer(1, len, c.sampleRate), d = buf.getChannelData(0);
+      for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+      const src = c.createBufferSource(); src.buffer = buf; src.loop = true;
+      const f = c.createBiquadFilter(); f.type = 'highpass'; f.frequency.value = 1800;
+      const g = c.createGain(); g.gain.value = 0; src.connect(f); f.connect(g); g.connect(this.master); src.start();
+      this.rainGain = g;
+    }
+    if (this.rainGain) this.rainGain.gain.setTargetAtTime(0.18 * rk, t, 0.4);
+  },
   setHum(d) {
     if (!this.ctx) return;
     if (!this.humGain) {
@@ -239,6 +255,7 @@ function startRun(mode) {
   G.result = null; G.shake = 0; G.alert = 0; G.downFlash = 0;
   G.machines = makeMachines(z);
   for (const c of z.containers) { c.searched = false; c.progress = 0; }
+  initWeather(); G.titleZoneStale = true;
   G.state = 'playing';
   if (G.mode === 'official') { Store.data.inProgress = G.zoneNum; Store.save(); }   // closing the tab mid-run still uses up the day
   hideScreens(); ui.hud.classList.remove('hidden');
@@ -360,6 +377,16 @@ function boot() {
   }
   hideScreens();
   G.state = 'title';
+  if (!G.zone || G.zone.num !== n || G.titleZoneStale) {
+    G.zone = makeZoneFor(n); G.titleZoneStale = false;
+    G.machines = makeMachines(G.zone); G.cans = G.zone.cans.map(c => ({ ...c }));
+    G.floats = []; G.noises = []; G.particles = []; G.thrown = [];
+    G.lift = { active: null, hold: 0, countdown: 0, arrived: false, arriveT: 0, lastBeep: -1 };
+    G.storm = STORM_SECONDS; G.stormHit = false; G.alert = 0; G.downFlash = 0;
+    initWeather();
+  }
+  G.player = newPlayer(G.zone.spawn.x, G.zone.spawn.y);
+  G.cam.x = G.zone.spawn.x; G.cam.y = G.zone.spawn.y - 4;
   ui.titleZone.textContent = DEBUG_ZONE === 'test' ? 'Test Zone' : 'Zone #' + n + (DEBUG_ZONE ? ' · debug' : '');
   ui.title.classList.remove('hidden');
   refreshCountdowns();
@@ -543,6 +570,7 @@ function update(dt) {
     if (G.state === 'playing') updateMachines(dt);
   }
   G.downFlash = Math.max(0, G.downFlash - dt * 1.5);
+  if (G.zone) updateWeather(dt);
   updateCans(dt);
   updateThrown(dt);
   for (const f of G.floats) f.t += dt; G.floats = G.floats.filter(f => f.t < f.life);
@@ -552,7 +580,15 @@ function update(dt) {
   G.shake = Math.max(0, G.shake - dt * 2);
   // camera
   const p = G.player;
-  if (p) {
+  if (p && G.state === 'title') {
+    // slow fly-over of today's zone behind the title
+    const z = G.zone;
+    G.cam.y -= dt * 0.9; if (G.cam.y < 6) G.cam.y = z.h - 6;
+    G.cam.x = lerp(G.cam.x, z.spawn.x + Math.sin(G.t * 0.15) * 6, 1 - Math.pow(0.3, dt));
+    const hw = W / S / 2, hh = H / S / 2;
+    G.cam.x = clamp(G.cam.x, Math.min(hw, z.w / 2), Math.max(z.w - hw, z.w / 2));
+    G.cam.y = clamp(G.cam.y, Math.min(hh, z.h / 2), Math.max(z.h - hh, z.h / 2));
+  } else if (p) {
     const z = G.zone;
     const lookX = p.x + Math.cos(p.dir) * 0.6 * (p.mode === 'idle' ? 0 : 1), lookY = p.y + Math.sin(p.dir) * 0.6 * (p.mode === 'idle' ? 0 : 1);
     const k = 1 - Math.pow(0.001, dt);
@@ -568,7 +604,6 @@ function updateStorm(dt) {
   const was = G.storm;
   G.storm -= dt;
   if (was > STORM_RED_AT && G.storm <= STORM_RED_AT) { Sfx.thunder(); addFloat(G.player.x, G.player.y - 1.2, 'STORM INCOMING', '#ff6a4a', true); G.shake = 0.6; }
-  if (G.storm <= 20 && Math.floor(was) !== Math.floor(G.storm) && Math.floor(G.storm) % 7 === 0) Sfx.thunder();
   if (G.storm <= 0) { G.storm = 0; Sfx.storm(); G.shake = 1.5; G.stormHit = true; endRun('downed', 'The storm hit before you reached a lift.'); }
 }
 
@@ -610,7 +645,10 @@ function updatePlayer(dt) {
   // Movement noise radius (phase 2 machines listen to this).
   p.noise = mode === 'sneak' ? 1.2 : mode === 'walk' ? 3 : mode === 'sprint' ? 6.5 : 0;
   p.noise *= 1 + 0.7 * wf;
-  if (mode === 'sprint' && Math.floor(p.step / 2.5) !== Math.floor((p.step - spd * dt * 2.2) / 2.5)) emitNoise(p.x, p.y, p.noise, 'step');
+  if (mode === 'sprint' && Math.floor(p.step / 2.5) !== Math.floor((p.step - spd * dt * 2.2) / 2.5)) { emitNoise(p.x, p.y, p.noise, 'step'); }
+  if (mode !== 'idle' && Math.floor(p.step / 1.3) !== Math.floor((p.step - spd * dt * 2.2) / 1.3)) {
+    for (let i = 0; i < (mode === 'sprint' ? 3 : 1); i++) G.particles.push({ x: p.x - Math.cos(p.dir) * 0.3, y: p.y - Math.sin(p.dir) * 0.3 + 0.15, vx: -Math.cos(p.dir) * 0.6 + (Math.random() - 0.5) * 0.6, vy: -Math.sin(p.dir) * 0.6 + (Math.random() - 0.5) * 0.6, z: 0, vz: 0.6 + Math.random() * 0.8, t: 0, life: 0.35 + Math.random() * 0.25, color: 'rgba(190,170,130,0.55)' });
+  }
   p.noiseT += dt;
   if (p.noiseT >= 0.3) { p.noiseT = 0; if (mode !== 'idle' && mode !== 'sprint') hearAll(p.x, p.y, p.noise); }
 
@@ -632,6 +670,7 @@ function updatePlayer(dt) {
       p.pack.push(c.type); p.weight += CANS[c.type].weight; p.value += CANS[c.type].pts;
       addFloat(p.x, p.y - 0.8, '+' + CANS[c.type].pts + ' ' + CANS[c.type].name, CANS[c.type].color, CANS[c.type].legendary);
       if (CANS[c.type].legendary) { Sfx.heavy(); G.shake = 0.3; } else Sfx.clink();
+      burst(c.x, c.y, CANS[c.type].color, CANS[c.type].legendary ? 16 : 6, 1.6);
     }
   }
 
@@ -1204,6 +1243,133 @@ function drawStrider(m) {
 }
 
 // ---------------------------------------------------------------------------
+// Weather and lighting (phase 5)
+// ---------------------------------------------------------------------------
+function stormK() { return G.stormHit ? 1 : clamp(1 - G.storm / STORM_RED_AT, 0, 1); }
+function rainK() { return G.stormHit ? 1 : clamp(1 - G.storm / 20, 0, 1); }
+const weather = { clouds: [], debris: [], rain: [], flash: 0, nextBolt: 4, lastDt: 0.016 };
+function initWeather() {
+  weather.clouds = [];
+  for (let i = 0; i < 6; i++) weather.clouds.push({ x: Math.random() * 40, y: Math.random() * 64, r: 5 + Math.random() * 5, a: 0.5 + Math.random() * 0.5 });
+  weather.debris = []; weather.rain = []; weather.flash = 0; weather.nextBolt = 4;
+}
+function updateWeather(dt) {
+  weather.lastDt = dt;
+  const k = stormK(), rk = rainK();
+  const speed = 1 + 2.5 * k;
+  for (const c of weather.clouds) {
+    c.x -= 0.9 * speed * dt; c.y += 0.35 * speed * dt;
+    if (c.x < -12) { c.x = 52; c.y = Math.random() * 64; }
+    if (c.y > 76) c.y = -12;
+  }
+  // wind-blown debris (screen space)
+  const target = Math.round(6 + 60 * k + (G.stormHit ? 60 : 0));
+  while (weather.debris.length < target) weather.debris.push({ x: Math.random() * W, y: Math.random() * H, vx: -(90 + Math.random() * 160), vy: 15 + Math.random() * 40, len: 6 + Math.random() * 12 });
+  if (weather.debris.length > target) weather.debris.length = target;
+  for (const d of weather.debris) {
+    d.x += d.vx * speed * dt; d.y += d.vy * dt;
+    if (d.x < -20 || d.y > H + 20) { d.x = W + 10 + Math.random() * 40; d.y = Math.random() * H - 40; }
+  }
+  const rTarget = Math.round(140 * rk);
+  while (weather.rain.length < rTarget) weather.rain.push({ x: Math.random() * (W + 200), y: Math.random() * H, len: 10 + Math.random() * 10, s: 0.7 + Math.random() * 0.6 });
+  if (weather.rain.length > rTarget) weather.rain.length = rTarget;
+  for (const r of weather.rain) {
+    r.x -= 260 * r.s * dt; r.y += 950 * r.s * dt;
+    if (r.y > H + 20 || r.x < -20) { r.x = Math.random() * (W + 300); r.y = -20 - Math.random() * 60; }
+  }
+  // lightning, with thunder trailing it
+  if (k > 0 && G.state === 'playing') {
+    weather.nextBolt -= dt;
+    if (weather.nextBolt <= 0) {
+      weather.flash = 1; weather.nextBolt = 2.5 + Math.random() * (7 - 5 * k);
+      G.shake = Math.max(G.shake, 0.12 + 0.2 * k);
+      setTimeout(() => Sfx.thunder(), 120 + Math.random() * 500);
+    }
+  }
+  weather.flash = Math.max(0, weather.flash - dt * 4);
+  Sfx.setStorm(k, rk);
+}
+// Soft cloud shadows drifting over the ground (world space).
+function drawCloudShadows() {
+  const k = stormK();
+  const alpha = 0.1 + 0.3 * k;
+  const hw = W / S / 2, hh = H / S / 2;
+  for (const c of weather.clouds) {
+    if (Math.abs(c.x - G.cam.x) > hw + c.r || Math.abs(c.y - G.cam.y) > hh + c.r) continue;
+    ctx.save(); ctx.translate(c.x, c.y); ctx.scale(c.r * 1.4, c.r);
+    ctx.fillStyle = glowFor('#120a14');
+    ctx.globalAlpha = alpha * c.a;
+    ctx.beginPath(); ctx.arc(0, 0, 1, 0, 7); ctx.fill();
+    ctx.restore();
+  }
+  ctx.globalAlpha = 1;
+}
+// Screen-space storm layers: the front rolling in from the top, debris, rain, lightning.
+function drawStormOverlay() {
+  const k = stormK(), rk = rainK();
+  if (k > 0) {
+    const g = ctx.createLinearGradient(0, 0, 0, H * (0.3 + 0.5 * k));
+    g.addColorStop(0, `rgba(30,6,8,${0.35 + 0.45 * k})`); g.addColorStop(1, 'rgba(30,6,8,0)');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+  }
+  ctx.lineCap = 'round';
+  if (weather.debris.length) {
+    ctx.strokeStyle = `rgba(215,195,150,${0.25 + 0.2 * k})`; ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    for (const d of weather.debris) { ctx.moveTo(d.x, d.y); ctx.lineTo(d.x + d.len, d.y - d.len * 0.22); }
+    ctx.stroke();
+  }
+  if (weather.rain.length) {
+    ctx.strokeStyle = `rgba(200,215,235,${0.18 + 0.2 * rk})`; ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    for (const r of weather.rain) { ctx.moveTo(r.x, r.y); ctx.lineTo(r.x + r.len * 0.27, r.y - r.len); }
+    ctx.stroke();
+  }
+  if (weather.flash > 0) { ctx.fillStyle = `rgba(255,240,230,${0.55 * weather.flash * weather.flash})`; ctx.fillRect(0, 0, W, H); }
+}
+// As the storm closes in the world goes dark and the glowing things carry the scene.
+let lightCv = null, lctx = null;
+function drawLighting(offX, offY) {
+  const k = stormK();
+  if (k <= 0.03 || !G.player) return;
+  const lw = Math.ceil(W / 2), lh = Math.ceil(H / 2);
+  if (!lightCv || lightCv.width !== lw || lightCv.height !== lh) { lightCv = document.createElement('canvas'); lightCv.width = lw; lightCv.height = lh; lctx = lightCv.getContext('2d'); }
+  lctx.setTransform(1, 0, 0, 1, 0, 0);
+  lctx.globalCompositeOperation = 'source-over';
+  lctx.fillStyle = `rgba(6,3,10,${0.6 * k})`; lctx.fillRect(0, 0, lw, lh);
+  lctx.globalCompositeOperation = 'destination-out';
+  const s = S / 2;
+  const toX = x => (x * S + offX) / 2, toY = y => (y * S + offY) / 2;
+  const hole = (x, y, r, a) => {
+    if (x < -r || y < -r || x > lw + r || y > lh + r) return;
+    const g = lctx.createRadialGradient(x, y, 0, x, y, r);
+    g.addColorStop(0, `rgba(0,0,0,${a})`); g.addColorStop(0.55, `rgba(0,0,0,${a * 0.45})`); g.addColorStop(1, 'rgba(0,0,0,0)');
+    lctx.fillStyle = g; lctx.beginPath(); lctx.arc(x, y, r, 0, 7); lctx.fill();
+  };
+  const p = G.player;
+  hole(toX(p.x), toY(p.y), 5.5 * s, 0.95);
+  for (const c of G.cans) hole(toX(c.x), toY(c.y), (CANS[c.type].glow ? 2.6 : 1.4) * s, 0.85);
+  for (const l of G.zone.lifts) hole(toX(l.x), toY(l.y), (G.lift.active === l ? 6 : 3.2) * s, 0.85);
+  for (const m of G.machines) {
+    if (m.dead) continue;
+    hole(toX(m.x), toY(m.y), 1.6 * s, 0.75);
+    if (m.kind === 'skitter') continue;
+    const D = MDEF[m.kind];
+    if (Math.abs(m.x - G.cam.x) > W / S / 2 + D.beamLen || Math.abs(m.y - G.cam.y) > H / S / 2 + D.beamLen) continue;
+    lctx.fillStyle = 'rgba(0,0,0,0.7)';
+    lctx.beginPath(); lctx.moveTo(toX(m.x), toY(m.y));
+    const N = 8;
+    for (let i = 0; i <= N; i++) {
+      const a = m.scan - D.beamHalf + 2 * D.beamHalf * i / N;
+      const t = castRay(m.x, m.y, a, D.beamLen, -1, -1);
+      lctx.lineTo(toX(m.x + Math.cos(a) * t), toY(m.y + Math.sin(a) * t));
+    }
+    lctx.closePath(); lctx.fill();
+  }
+  ctx.drawImage(lightCv, 0, 0, W, H);
+}
+
+// ---------------------------------------------------------------------------
 // Rendering
 // ---------------------------------------------------------------------------
 const PAL = {
@@ -1247,12 +1413,15 @@ function render() {
   for (const c of G.thrown) drawCan(c);
   drawParticles();
   drawPlayer();
+  drawCloudShadows();
   drawMachines('above');
   if (G.lift.arrived) drawLiftCage();
 
   // screen space
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  drawLighting(offX, offY);
   drawAtmosphere();
+  drawStormOverlay();
   drawFloats(offX, offY);
   drawLiftIndicator(offX, offY);
   drawJoystick();
@@ -1604,7 +1773,7 @@ function drawAtmosphere() {
     vignette.addColorStop(0, 'rgba(0,0,0,0)'); vignette.addColorStop(1, 'rgba(10,5,0,0.55)');
   }
   ctx.fillStyle = vignette; ctx.fillRect(0, 0, W, H);
-  if (k > 0 && Math.random() < 0.004 * k) { ctx.fillStyle = 'rgba(255,230,220,0.25)'; ctx.fillRect(0, 0, W, H); }
+  if (G.lift.arrived) { ctx.fillStyle = `rgba(0,0,0,${clamp((G.lift.arriveT - 0.3) / 0.6, 0, 1)})`; ctx.fillRect(0, 0, W, H); }
 }
 
 function drawFloats(offX, offY) {
