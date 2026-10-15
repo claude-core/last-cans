@@ -29,7 +29,7 @@ const ui = {
   prompt: $('prompt'), mute: $('mute'), alert: $('alert'), alertFill: $('alert-fill'), alertText: $('alert-text'),
   btn: { call: $('btn-call'), search: $('btn-search'), swing: $('btn-swing'), throw: $('btn-throw') },
   title: $('screen-title'), result: $('screen-result'), resultTitle: $('result-title'),
-  resultBody: $('result-body'), go: $('btn-go'), again: $('btn-again'), titleZone: $('title-zone'),
+  resultBody: $('result-body'), go: $('btn-go'), again: $('btn-again'), titleZone: $('title-zone'), titleNext: $('title-next'),
 };
 
 let dpr = 1, W = 1, H = 1, S = 40;   // S = css px per world unit
@@ -141,6 +141,37 @@ window.addEventListener('pointerdown', unlockAudio, { passive: true });
 window.addEventListener('touchend', unlockAudio, { passive: true });
 
 // ---------------------------------------------------------------------------
+// The daily zone. Zone # = days since launch + 1, rolling over at midnight
+// in New York for everyone. ?zone=N plays any zone (debug, never saved).
+// ---------------------------------------------------------------------------
+const LAUNCH_DATE = '2026-10-15';
+const nyFmt = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+function nyParts(date) {
+  const p = {}; for (const part of nyFmt.formatToParts(date)) p[part.type] = part.value;
+  return { y: +p.year, m: +p.month, d: +p.day, h: (+p.hour) % 24, mi: +p.minute, s: +p.second };
+}
+function zoneNumber(now) {
+  const p = nyParts(now || new Date());
+  const [ly, lm, ld] = LAUNCH_DATE.split('-').map(Number);
+  return Math.round((Date.UTC(p.y, p.m - 1, p.d) - Date.UTC(ly, lm - 1, ld)) / 86400000) + 1;
+}
+function msUntilNextZone(now) {
+  now = now || new Date();
+  const p = nyParts(now);
+  return (86400 - (p.h * 3600 + p.mi * 60 + p.s)) * 1000 - now.getMilliseconds();
+}
+const urlParams = new URLSearchParams(location.search);
+const DEBUG_ZONE = urlParams.get('zone');          // null, 'test', or a number
+function todayZoneNumber() { return DEBUG_ZONE && DEBUG_ZONE !== 'test' ? Math.max(1, parseInt(DEBUG_ZONE, 10) || 1) : zoneNumber(); }
+function makeZoneFor(n) {
+  if (DEBUG_ZONE === 'test') return makeTestZone();
+  const t0 = performance.now();
+  const z = generateZone(n);
+  console.log('Last Cans zone #' + n + ' seed ' + z.seed + ' attempt ' + z.attempt + ' (' + Math.round(performance.now() - t0) + ' ms)');
+  return z;
+}
+
+// ---------------------------------------------------------------------------
 // Game state
 // ---------------------------------------------------------------------------
 const G = {
@@ -156,7 +187,8 @@ function newPlayer(x, y) {
 }
 
 function startRun() {
-  G.zone = makeTestZone();
+  G.zoneNum = todayZoneNumber();
+  G.zone = makeZoneFor(G.zoneNum);
   const z = G.zone;
   G.player = newPlayer(z.spawn.x, z.spawn.y);
   G.cam.x = z.spawn.x; G.cam.y = z.spawn.y;
@@ -208,7 +240,15 @@ function showResult() {
 
 ui.go.addEventListener('click', e => { e.preventDefault(); unlockAudio(); startRun(); });
 ui.again.addEventListener('click', e => { e.preventDefault(); unlockAudio(); startRun(); });
-ui.titleZone.textContent = 'Test Zone';
+function refreshTitle() {
+  const n = todayZoneNumber();
+  ui.titleZone.textContent = DEBUG_ZONE === 'test' ? 'Test Zone' : 'Zone #' + n + (DEBUG_ZONE ? ' · debug' : '');
+  const ms = msUntilNextZone();
+  const s = Math.max(0, Math.floor(ms / 1000));
+  ui.titleNext.textContent = 'Next zone in ' + Math.floor(s / 3600) + ':' + String(Math.floor(s / 60) % 60).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0');
+}
+refreshTitle();
+setInterval(() => { if (G.state === 'title') refreshTitle(); }, 1000);
 
 function fmtTime(s) { s = Math.max(0, Math.ceil(s)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }
 

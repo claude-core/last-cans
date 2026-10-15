@@ -98,3 +98,5 @@ h1.downed { color: #ff7a5a; text-shadow: 0 2px 0 #4a1c1c, 0 0 24px rgba(255,60,4
 }
 #alert.spotted { animation: blink .25s steps(2) infinite; }
 @keyframes blink { to { opacity: .55; } }
+
+.next { font-size: 13px; color: #8b7d64; margin: -8px 0 12px; font-variant-numeric: tabular-nums; }
